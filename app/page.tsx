@@ -56,9 +56,10 @@ export default function HomePage() {
               <span className="text-xs uppercase tracking-wide text-red-400">Live</span>
             </div>
             <h2 className="font-semibold text-lg">{s.place}</h2>
-            <p className="text-sm text-neutral-400 mb-3">
+            <p className="text-sm text-neutral-400">
               {s.district}, {s.country}
             </p>
+            <p className="text-xs text-neutral-500 mb-3">👀 {s.viewerCount} watching</p>
             <div className="flex gap-2">
               <Link
                 href={`/watch/${s.id}`}

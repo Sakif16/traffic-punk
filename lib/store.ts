@@ -12,8 +12,8 @@ if (!globalThis.__streams) {
 
 export const streams: Map<string, LiveStream> = globalThis.__streams;
 
-export function addStream(stream: LiveStream): void {
-  streams.set(stream.id, stream);
+export function addStream(stream: Omit<LiveStream, 'viewerCount'>): void {
+  streams.set(stream.id, { ...stream, viewerCount: 0 });
 }
 
 export function removeStream(id: string): void {
@@ -26,4 +26,11 @@ export function listStreams(): LiveStream[] {
 
 export function getStream(id: string): LiveStream | undefined {
   return streams.get(id);
+}
+
+export function updateViewerCount(id: string, viewerCount: number): boolean {
+  const stream = streams.get(id);
+  if (!stream) return false;
+  stream.viewerCount = Math.max(0, viewerCount);
+  return true;
 }

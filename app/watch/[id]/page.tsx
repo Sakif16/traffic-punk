@@ -18,6 +18,7 @@ export default function WatchPage() {
   useEffect(() => {
     let peer: Peer | undefined;
     let cancelled = false;
+    let pollInterval: ReturnType<typeof setInterval> | undefined;
 
     async function connect() {
       const res = await fetch('/api/streams');
@@ -33,10 +34,15 @@ export default function WatchPage() {
       const { default: PeerCtor } = await import('peerjs');
       peer = new PeerCtor();
 
+      // The broadcaster calls US with the real video/audio — we just open
+      // a data connection to let them know a viewer showed up.
       peer.on('open', () => {
         if (cancelled || !peer) return;
-        // We pass an empty stream because we're only receiving, not sending.
-        const call: MediaConnection = peer.call(stream.peerId, new MediaStream());
+        peer.connect(stream.peerId);
+      });
+
+      peer.on('call', (call: MediaConnection) => {
+        call.answer(); // we don't send anything back, only receive
         call.on('stream', (remoteStream: MediaStream) => {
           if (videoRef.current) {
             videoRef.current.srcObject = remoteStream;
@@ -48,12 +54,25 @@ export default function WatchPage() {
       });
 
       peer.on('error', () => setStatus('offline'));
+
+      // Keep place/district/country + viewer count fresh while watching.
+      pollInterval = setInterval(async () => {
+        try {
+          const r = await fetch('/api/streams');
+          const d: { streams: LiveStream[] } = await r.json();
+          const updated = (d.streams || []).find((s) => s.id === id);
+          if (updated) setInfo(updated);
+        } catch {
+          // ignore transient errors
+        }
+      }, 5000);
     }
 
     connect();
 
     return () => {
       cancelled = true;
+      if (pollInterval) clearInterval(pollInterval);
       if (peer) peer.destroy();
     };
   }, [id]);
@@ -61,12 +80,19 @@ export default function WatchPage() {
   return (
     <main className="w-full h-screen bg-black flex flex-col">
       <video ref={videoRef} autoPlay playsInline className="flex-1 w-full object-contain" />
-      <div className="p-2 text-center text-sm text-neutral-300 bg-neutral-900">
-        {status === 'live' && info
-          ? `${info.place} — ${info.district}, ${info.country}`
-          : status === 'connecting'
-          ? 'Connecting…'
-          : 'Stream offline'}
+      <div className="p-2 text-center text-sm text-neutral-300 bg-neutral-900 flex items-center justify-center gap-3">
+        {status === 'live' && info ? (
+          <>
+            <span>
+              {info.place} — {info.district}, {info.country}
+            </span>
+            <span className="text-neutral-500">👀 {info.viewerCount}</span>
+          </>
+        ) : status === 'connecting' ? (
+          'Connecting…'
+        ) : (
+          'Stream offline'
+        )}
       </div>
     </main>
   );

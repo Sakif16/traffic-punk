@@ -1,10 +1,10 @@
 // app/go-live/page.tsx
 'use client';
 
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import type Peer from 'peerjs';
-import type { MediaConnection } from 'peerjs';
+import type { DataConnection } from 'peerjs';
 
 export default function GoLivePage() {
   const [place, setPlace] = useState('');
@@ -12,11 +12,67 @@ export default function GoLivePage() {
   const [country, setCountry] = useState('');
   const [error, setError] = useState('');
   const [live, setLive] = useState(false);
+  const [viewerCount, setViewerCount] = useState(0);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const peerRef = useRef<Peer | null>(null);
+  const localStreamRef = useRef<MediaStream | null>(null);
   const streamIdRef = useRef<string | null>(null);
+  const viewersRef = useRef<Map<string, DataConnection>>(new Map());
+  const endedRef = useRef(false);
+
   const router = useRouter();
+
+  // Stops the camera/mic hardware and tears down all connections.
+  // Safe to call more than once (e.g. both on unmount AND on button click).
+  function stopEverything() {
+    if (endedRef.current) return;
+    endedRef.current = true;
+
+    if (streamIdRef.current) {
+      fetch('/api/streams/' + streamIdRef.current, {
+        method: 'DELETE',
+        keepalive: true,
+      }).catch(() => {});
+    }
+
+    if (peerRef.current) {
+      peerRef.current.destroy();
+      peerRef.current = null;
+    }
+
+    // This is the critical line that was missing before — without it,
+    // the camera/mic hardware keeps running even after the peer connection closes.
+    if (localStreamRef.current) {
+      localStreamRef.current.getTracks().forEach((track) => track.stop());
+      localStreamRef.current = null;
+    }
+
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+
+    viewersRef.current.clear();
+  }
+
+  function reportViewerCount() {
+    if (!streamIdRef.current) return;
+    fetch('/api/streams/' + streamIdRef.current, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ viewerCount: viewersRef.current.size }),
+    }).catch(() => {});
+  }
+
+  useEffect(() => {
+    window.addEventListener('beforeunload', stopEverything);
+    return () => {
+      window.removeEventListener('beforeunload', stopEverything);
+      // Covers back-button / clicking a nav link without pressing "End Stream".
+      stopEverything();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function startStream(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -36,6 +92,7 @@ export default function GoLivePage() {
         video: true,
         audio: true,
       });
+      localStreamRef.current = localStream;
 
       if (videoRef.current) {
         videoRef.current.srcObject = localStream;
@@ -49,8 +106,27 @@ export default function GoLivePage() {
       peerRef.current = peer;
 
       peer.on('open', async (peerId: string) => {
-        peer.on('call', (call: MediaConnection) => {
-          call.answer(localStream);
+        // A viewer opens a lightweight data connection first, just to say
+        // "I'm here." We then call THEM with our real camera stream.
+        // Initiating the media call from the broadcaster's side (instead of
+        // the viewer's) is what makes the video/audio actually negotiate
+        // correctly across different devices and networks.
+        peer.on('connection', (conn: DataConnection) => {
+          conn.on('open', () => {
+            if (!localStreamRef.current) return;
+
+            viewersRef.current.set(conn.peer, conn);
+            setViewerCount(viewersRef.current.size);
+            reportViewerCount();
+
+            peer.call(conn.peer, localStreamRef.current);
+          });
+
+          conn.on('close', () => {
+            viewersRef.current.delete(conn.peer);
+            setViewerCount(viewersRef.current.size);
+            reportViewerCount();
+          });
         });
 
         await fetch('/api/streams', {
@@ -72,28 +148,14 @@ export default function GoLivePage() {
         console.error(err);
         setError('Connection error: ' + err.type);
       });
-
-      window.addEventListener('beforeunload', endStream);
     } catch (err) {
       console.error(err);
       setError('Could not access camera/microphone.');
     }
   }
 
-  function endStream() {
-    if (streamIdRef.current) {
-      fetch('/api/streams/' + streamIdRef.current, {
-        method: 'DELETE',
-        keepalive: true,
-      });
-    }
-    if (peerRef.current) {
-      peerRef.current.destroy();
-    }
-  }
-
   function handleStop() {
-    endStream();
+    stopEverything();
     router.push('/');
   }
 
@@ -145,12 +207,15 @@ export default function GoLivePage() {
       <div className={live ? 'mt-4' : 'mt-4 hidden'}>
         <video ref={videoRef} autoPlay muted playsInline className="w-full rounded bg-black" />
         {live && (
-          <button
-            onClick={handleStop}
-            className="mt-3 w-full bg-neutral-800 hover:bg-neutral-700 py-2 rounded"
-          >
-            End Stream
-          </button>
+          <div className="mt-3 flex items-center justify-between">
+            <span className="text-sm text-neutral-400">👀 {viewerCount} watching</span>
+            <button
+              onClick={handleStop}
+              className="bg-neutral-800 hover:bg-neutral-700 px-4 py-2 rounded"
+            >
+              End Stream
+            </button>
+          </div>
         )}
       </div>
     </main>

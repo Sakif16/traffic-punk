@@ -7,6 +7,7 @@ export interface LiveStream {
   district: string;
   country: string;
   createdAt: number;
+  viewerCount: number;
 }
 
 export interface CreateStreamPayload {
@@ -15,4 +16,8 @@ export interface CreateStreamPayload {
   place: string;
   district: string;
   country: string;
+}
+
+export interface UpdateStreamPayload {
+  viewerCount: number;
 }
