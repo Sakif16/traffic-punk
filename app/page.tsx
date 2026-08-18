@@ -2,21 +2,14 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { useCallback } from 'react';
 import Link from 'next/link';
 import { LiveStream } from '@/lib/types';
 
 export default function HomePage() {
   const [streams, setStreams] = useState<LiveStream[]>([]);
-  const [origin, setOrigin] = useState('');
 
-  useEffect(() => {
-    setOrigin(window.location.origin);
-    fetchStreams();
-    const interval = setInterval(fetchStreams, 4000);
-    return () => clearInterval(interval);
-  }, []);
-
-  async function fetchStreams() {
+  const fetchStreams = useCallback(async () => {
     try {
       const res = await fetch('/api/streams');
       const data: { streams: LiveStream[] } = await res.json();
@@ -24,9 +17,19 @@ export default function HomePage() {
     } catch (e) {
       console.error('Failed to load streams', e);
     }
-  }
+  }, []);
+
+  useEffect(() => {
+    const timeout = setTimeout(fetchStreams, 0);
+    const interval = setInterval(fetchStreams, 4000);
+    return () => {
+      clearTimeout(timeout);
+      clearInterval(interval);
+    };
+  }, [fetchStreams]);
 
   function copyEmbed(id: string) {
+    const origin = window.location.origin;
     const code = `<iframe src="${origin}/watch/${id}" width="640" height="360" allow="autoplay" frameborder="0"></iframe>`;
     navigator.clipboard.writeText(code);
     alert('Embed code copied to clipboard');

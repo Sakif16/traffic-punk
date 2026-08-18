@@ -4,7 +4,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import type Peer from 'peerjs';
-import type { DataConnection } from 'peerjs';
+import type { DataConnection, MediaConnection } from 'peerjs';
+
+function isViewerReadyMessage(data: unknown): data is { type: 'viewer-ready' } {
+  return typeof data === 'object' && data !== null && 'type' in data && data.type === 'viewer-ready';
+}
 
 export default function GoLivePage() {
   const [place, setPlace] = useState('');
@@ -19,6 +23,7 @@ export default function GoLivePage() {
   const localStreamRef = useRef<MediaStream | null>(null);
   const streamIdRef = useRef<string | null>(null);
   const viewersRef = useRef<Map<string, DataConnection>>(new Map());
+  const callsRef = useRef<Map<string, MediaConnection>>(new Map());
   const endedRef = useRef(false);
 
   const router = useRouter();
@@ -41,6 +46,11 @@ export default function GoLivePage() {
       peerRef.current = null;
     }
 
+    callsRef.current.forEach((call) => call.close());
+    callsRef.current.clear();
+    viewersRef.current.forEach((conn) => conn.close());
+    viewersRef.current.clear();
+
     // This is the critical line that was missing before — without it,
     // the camera/mic hardware keeps running even after the peer connection closes.
     if (localStreamRef.current) {
@@ -52,7 +62,7 @@ export default function GoLivePage() {
       videoRef.current.srcObject = null;
     }
 
-    viewersRef.current.clear();
+    setViewerCount(0);
   }
 
   function reportViewerCount() {
@@ -71,12 +81,12 @@ export default function GoLivePage() {
       // Covers back-button / clicking a nav link without pressing "End Stream".
       stopEverything();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function startStream(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setError('');
+    endedRef.current = false;
 
     if (place.trim() === '' || /\s/.test(place.trim())) {
       setError('Place must be a single word, no spaces.');
@@ -111,22 +121,45 @@ export default function GoLivePage() {
         // Initiating the media call from the broadcaster's side (instead of
         // the viewer's) is what makes the video/audio actually negotiate
         // correctly across different devices and networks.
+        function removeViewer(peerId: string) {
+          const conn = viewersRef.current.get(peerId);
+          const call = callsRef.current.get(peerId);
+          viewersRef.current.delete(peerId);
+          callsRef.current.delete(peerId);
+          conn?.close();
+          call?.close();
+          setViewerCount(viewersRef.current.size);
+          reportViewerCount();
+        }
+
         peer.on('connection', (conn: DataConnection) => {
-          conn.on('open', () => {
-            if (!localStreamRef.current) return;
+          let callStarted = false;
+
+          function callViewer() {
+            if (callStarted || !localStreamRef.current || endedRef.current) return;
+            callStarted = true;
 
             viewersRef.current.set(conn.peer, conn);
             setViewerCount(viewersRef.current.size);
             reportViewerCount();
 
-            peer.call(conn.peer, localStreamRef.current);
+            const call = peer.call(conn.peer, localStreamRef.current);
+            callsRef.current.set(conn.peer, call);
+            call.on('close', () => removeViewer(conn.peer));
+            call.on('error', () => removeViewer(conn.peer));
+          }
+
+          conn.on('open', callViewer);
+          conn.on('data', (data: unknown) => {
+            if (isViewerReadyMessage(data)) callViewer();
           });
 
           conn.on('close', () => {
-            viewersRef.current.delete(conn.peer);
-            setViewerCount(viewersRef.current.size);
-            reportViewerCount();
+            removeViewer(conn.peer);
           });
+
+          conn.on('error', () => removeViewer(conn.peer));
+          if (conn.open) callViewer();
         });
 
         await fetch('/api/streams', {
@@ -147,6 +180,8 @@ export default function GoLivePage() {
       peer.on('error', (err: { type: string }) => {
         console.error(err);
         setError('Connection error: ' + err.type);
+        setLive(false);
+        stopEverything();
       });
     } catch (err) {
       console.error(err);

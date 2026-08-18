@@ -2,7 +2,6 @@
 import { LiveStream } from './types';
 
 declare global {
-  // eslint-disable-next-line no-var
   var __streams: Map<string, LiveStream> | undefined;
 }
 
