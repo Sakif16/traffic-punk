@@ -4,11 +4,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import type Peer from 'peerjs';
-import type { DataConnection, MediaConnection } from 'peerjs';
-
-function isViewerReadyMessage(data: unknown): data is { type: 'viewer-ready' } {
-  return typeof data === 'object' && data !== null && 'type' in data && data.type === 'viewer-ready';
-}
+import type { MediaConnection } from 'peerjs';
 
 export default function GoLivePage() {
   const [place, setPlace] = useState('');
@@ -22,8 +18,7 @@ export default function GoLivePage() {
   const peerRef = useRef<Peer | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
   const streamIdRef = useRef<string | null>(null);
-  const viewersRef = useRef<Map<string, DataConnection>>(new Map());
-  const callsRef = useRef<Map<string, MediaConnection>>(new Map());
+  const viewersRef = useRef<Map<string, MediaConnection>>(new Map());
   const endedRef = useRef(false);
 
   const router = useRouter();
@@ -46,9 +41,7 @@ export default function GoLivePage() {
       peerRef.current = null;
     }
 
-    callsRef.current.forEach((call) => call.close());
-    callsRef.current.clear();
-    viewersRef.current.forEach((conn) => conn.close());
+    viewersRef.current.forEach((call) => call.close());
     viewersRef.current.clear();
 
     // This is the critical line that was missing before — without it,
@@ -116,50 +109,29 @@ export default function GoLivePage() {
       peerRef.current = peer;
 
       peer.on('open', async (peerId: string) => {
-        // A viewer opens a lightweight data connection first, just to say
-        // "I'm here." We then call THEM with our real camera stream.
-        // Initiating the media call from the broadcaster's side (instead of
-        // the viewer's) is what makes the video/audio actually negotiate
-        // correctly across different devices and networks.
-        function removeViewer(peerId: string) {
-          const conn = viewersRef.current.get(peerId);
-          const call = callsRef.current.get(peerId);
+        function removeViewer(peerId: string, call: MediaConnection) {
+          if (viewersRef.current.get(peerId) !== call) return;
           viewersRef.current.delete(peerId);
-          callsRef.current.delete(peerId);
-          conn?.close();
-          call?.close();
           setViewerCount(viewersRef.current.size);
           reportViewerCount();
         }
 
-        peer.on('connection', (conn: DataConnection) => {
-          let callStarted = false;
-
-          function callViewer() {
-            if (callStarted || !localStreamRef.current || endedRef.current) return;
-            callStarted = true;
-
-            viewersRef.current.set(conn.peer, conn);
-            setViewerCount(viewersRef.current.size);
-            reportViewerCount();
-
-            const call = peer.call(conn.peer, localStreamRef.current);
-            callsRef.current.set(conn.peer, call);
-            call.on('close', () => removeViewer(conn.peer));
-            call.on('error', () => removeViewer(conn.peer));
+        peer.on('call', (call: MediaConnection) => {
+          if (!localStreamRef.current || endedRef.current) {
+            call.close();
+            return;
           }
 
-          conn.on('open', callViewer);
-          conn.on('data', (data: unknown) => {
-            if (isViewerReadyMessage(data)) callViewer();
-          });
+          const previousCall = viewersRef.current.get(call.peer);
+          if (previousCall && previousCall !== call) previousCall.close();
 
-          conn.on('close', () => {
-            removeViewer(conn.peer);
-          });
+          viewersRef.current.set(call.peer, call);
+          setViewerCount(viewersRef.current.size);
+          reportViewerCount();
 
-          conn.on('error', () => removeViewer(conn.peer));
-          if (conn.open) callViewer();
+          call.on('close', () => removeViewer(call.peer, call));
+          call.on('error', () => removeViewer(call.peer, call));
+          call.answer(localStreamRef.current);
         });
 
         await fetch('/api/streams', {
