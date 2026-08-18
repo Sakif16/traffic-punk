@@ -4,7 +4,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import type Peer from 'peerjs';
-import type { DataConnection, MediaConnection } from 'peerjs';
+import type { MediaConnection } from 'peerjs';
 import { LiveStream } from '@/lib/types';
 
 type Status = 'connecting' | 'live' | 'blocked' | 'offline';
@@ -29,8 +29,10 @@ export default function WatchPage() {
 
   useEffect(() => {
     let peer: Peer | undefined;
-    let dataConn: DataConnection | undefined;
     let mediaCall: MediaConnection | undefined;
+    let viewerOfferStream: MediaStream | undefined;
+    let audioContext: AudioContext | undefined;
+    let oscillator: OscillatorNode | undefined;
     let cancelled = false;
     let offline = false;
     let pollInterval: ReturnType<typeof setInterval> | undefined;
@@ -62,16 +64,50 @@ export default function WatchPage() {
       }, 1000);
     }
 
+    function createViewerOfferStream() {
+      const tracks: MediaStreamTrack[] = [];
+      const canvas = document.createElement('canvas');
+      canvas.width = 16;
+      canvas.height = 9;
+      canvas.getContext('2d')?.fillRect(0, 0, canvas.width, canvas.height);
+      const canvasStream = canvas.captureStream(1);
+      const videoTrack = canvasStream.getVideoTracks()[0];
+      if (videoTrack) tracks.push(videoTrack);
+
+      try {
+        audioContext = new AudioContext();
+        const destination = audioContext.createMediaStreamDestination();
+        const gain = audioContext.createGain();
+        oscillator = audioContext.createOscillator();
+        gain.gain.value = 0;
+        oscillator.connect(gain);
+        gain.connect(destination);
+        oscillator.start();
+        const audioTrack = destination.stream.getAudioTracks()[0];
+        if (audioTrack) tracks.push(audioTrack);
+      } catch {
+        // A video-only offer still lets browsers negotiate the important visual track.
+      }
+
+      return new MediaStream(tracks);
+    }
+
+    function stopViewerOfferStream() {
+      viewerOfferStream?.getTracks().forEach((track) => track.stop());
+      viewerOfferStream = undefined;
+      oscillator?.stop();
+      oscillator = undefined;
+      void audioContext?.close();
+      audioContext = undefined;
+    }
+
     function scheduleMediaRetry(stream: LiveStream, attempt: number) {
       clearMediaWait();
       mediaWaitTimeout = setTimeout(() => {
         if (cancelled || statusRef.current === 'live') return;
 
-        const previousConn = dataConn;
         const previousCall = mediaCall;
-        dataConn = undefined;
         mediaCall = undefined;
-        previousConn?.close();
         previousCall?.close();
 
         if (attempt >= MAX_JOIN_ATTEMPTS) {
@@ -87,35 +123,32 @@ export default function WatchPage() {
       if (cancelled || !peer) return;
       updateStatus('connecting');
 
-      const previousConn = dataConn;
       const previousCall = mediaCall;
-      dataConn = undefined;
       mediaCall = undefined;
-      previousConn?.close();
       previousCall?.close();
 
-      const conn = peer.connect(stream.peerId, {
+      viewerOfferStream ??= createViewerOfferStream();
+      const call = peer.call(stream.peerId, viewerOfferStream, {
         metadata: { streamId: stream.id, role: 'viewer' },
       });
-      dataConn = conn;
+      mediaCall = call;
+      scheduleMediaRetry(stream, attempt);
 
-      conn.on('open', () => {
-        conn.send({ type: 'viewer-ready', streamId: stream.id });
-        scheduleMediaRetry(stream, attempt);
+      call.on('stream', (remoteStream: MediaStream) => {
+        clearMediaWait();
+        void playRemoteStream(remoteStream);
       });
 
-      conn.on('error', () => {
-        if (dataConn !== conn) return;
+      call.on('close', () => {
+        if (mediaCall !== call || statusRef.current === 'live' || offline || cancelled) return;
         if (attempt >= MAX_JOIN_ATTEMPTS) goOffline();
         else connectToBroadcaster(stream, attempt + 1);
       });
 
-      conn.on('close', () => {
-        if (dataConn !== conn) return;
-        if (statusRef.current !== 'live' && !offline && !cancelled) {
-          if (attempt >= MAX_JOIN_ATTEMPTS) goOffline();
-          else connectToBroadcaster(stream, attempt + 1);
-        }
+      call.on('error', () => {
+        if (mediaCall !== call || offline || cancelled) return;
+        if (attempt >= MAX_JOIN_ATTEMPTS) goOffline();
+        else connectToBroadcaster(stream, attempt + 1);
       });
     }
 
@@ -123,9 +156,9 @@ export default function WatchPage() {
       const video = videoRef.current;
       if (!video) return;
 
-      video.srcObject = remoteStream;
       video.muted = true;
       video.playsInline = true;
+      video.srcObject = remoteStream;
 
       try {
         await video.play();
@@ -152,22 +185,6 @@ export default function WatchPage() {
       peer.on('open', () => {
         if (cancelled || !peer) return;
         connectToBroadcaster(stream);
-      });
-
-      peer.on('call', (call: MediaConnection) => {
-        mediaCall = call;
-        call.on('stream', (remoteStream: MediaStream) => {
-          clearMediaWait();
-          void playRemoteStream(remoteStream);
-        });
-        // Fires when the broadcaster ends the stream / closes the connection.
-        call.on('close', () => {
-          if (mediaCall === call) goOffline();
-        });
-        call.on('error', () => {
-          if (mediaCall === call) goOffline();
-        });
-        call.answer();
       });
 
       peer.on('error', goOffline);
@@ -198,8 +215,8 @@ export default function WatchPage() {
       clearMediaWait();
       if (pollInterval) clearInterval(pollInterval);
       if (countdownInterval) clearInterval(countdownInterval);
-      dataConn?.close();
       mediaCall?.close();
+      stopViewerOfferStream();
       if (peer) peer.destroy();
     };
   }, [id, router]);
@@ -207,7 +224,7 @@ export default function WatchPage() {
   return (
     <main className="w-full h-screen bg-black flex flex-col">
       <div className="flex-1 relative">
-        <video ref={videoRef} autoPlay playsInline className="w-full h-full object-contain" />
+        <video ref={videoRef} autoPlay muted playsInline className="w-full h-full object-contain" />
 
         {status === 'offline' && (
           <div className="absolute inset-0 bg-black/90 flex flex-col items-center justify-center gap-2">
