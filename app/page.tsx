@@ -5,7 +5,7 @@ import { useEffect, useState, useCallback, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { LiveStream } from '@/lib/types';
-require("node:dns/promises").setServers(["1.1.1.1", "8.8.8.8"]);
+
 
 function HomeContent() {
   const [streams, setStreams] = useState<LiveStream[]>([]);
