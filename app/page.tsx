@@ -1,14 +1,17 @@
 // app/page.tsx
 'use client';
 
-import { useEffect, useState } from 'react';
-import { useCallback } from 'react';
+import { useEffect, useState, useCallback, Suspense } from 'react';
+import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { LiveStream } from '@/lib/types';
 
-export default function HomePage() {
+function HomeContent() {
   const [streams, setStreams] = useState<LiveStream[]>([]);
   const [origin, setOrigin] = useState('');
+
+  const searchParams = useSearchParams();
+  const isEmbed = searchParams.get('embed') === '1';
 
   const fetchStreams = useCallback(async () => {
     try {
@@ -37,24 +40,28 @@ export default function HomePage() {
     alert('Embed code copied to clipboard');
   }
 
-  const listEmbedCode = `<iframe src="${origin}" width="640" height="480" allow="autoplay" frameborder="0"></iframe>`;
+  const listEmbedCode = `<iframe src="${origin}?embed=1" width="640" height="480" allow="autoplay" frameborder="0"></iframe>`;
 
   return (
     <main className="max-w-4xl mx-auto p-6">
-      <div className="flex items-center justify-between mb-8">
-        <h1 className="text-2xl font-bold">Live Roads</h1>
-        <Link
-          href="/go-live"
-          className="bg-red-600 hover:bg-red-700 px-4 py-2 rounded text-sm font-medium"
-        >
-          Go Live
-        </Link>
-      </div>
+      {!isEmbed && (
+        <div className="flex items-center justify-between mb-8">
+          <h1 className="text-2xl font-bold">Live Roads</h1>
+          <Link
+            href="/go-live"
+            className="bg-red-600 hover:bg-red-700 px-4 py-2 rounded text-sm font-medium"
+          >
+            Go Live
+          </Link>
+        </div>
+      )}
 
       <div className="border border-neutral-800 rounded p-4">
-        <pre className="text-xs text-neutral-400 bg-neutral-900 rounded p-3 mb-4 overflow-x-auto whitespace-pre-wrap break-all">
-          {listEmbedCode}
-        </pre>
+        {!isEmbed && (
+          <pre className="text-xs text-neutral-400 bg-neutral-900 rounded p-3 mb-4 overflow-x-auto whitespace-pre-wrap break-all">
+            {listEmbedCode}
+          </pre>
+        )}
 
         {streams.length === 0 && (
           <p className="text-neutral-400">No live streams right now.</p>
@@ -91,5 +98,13 @@ export default function HomePage() {
         </div>
       </div>
     </main>
+  );
+}
+
+export default function HomePage() {
+  return (
+    <Suspense fallback={null}>
+      <HomeContent />
+    </Suspense>
   );
 }
