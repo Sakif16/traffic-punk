@@ -5,6 +5,7 @@ import { useEffect, useState } from 'react';
 import { useCallback } from 'react';
 import Link from 'next/link';
 import { LiveStream } from '@/lib/types';
+require("node:dns/promises").setServers(["1.1.1.1", "8.8.8.8"]);
 
 export default function HomePage() {
   const [streams, setStreams] = useState<LiveStream[]>([]);
