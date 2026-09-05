@@ -222,49 +222,72 @@ export default function WatchPage() {
   }, [id, router]);
 
   return (
-    <main className="w-full h-screen bg-black flex flex-col">
-      <div className="flex-1 relative">
-        <video ref={videoRef} autoPlay muted playsInline className="w-full h-full object-contain" />
+    <main className="min-h-screen bg-neutral-950 text-neutral-100 flex flex-col items-center p-4 sm:p-6">
+      <div className="w-full max-w-3xl">
+        <div className="relative w-full aspect-video bg-black rounded overflow-hidden">
+          <video
+            ref={videoRef}
+            autoPlay
+            muted
+            playsInline
+            className="w-full h-full object-contain"
+          />
 
-        {status === 'offline' && (
-          <div className="absolute inset-0 bg-black/90 flex flex-col items-center justify-center gap-2">
-            <p className="text-lg font-semibold">Stream ended</p>
-            <p className="text-neutral-400 text-sm">
-              Redirecting to home in {countdown}…
+          {status === 'offline' && (
+            <div className="absolute inset-0 bg-black/90 flex flex-col items-center justify-center gap-2">
+              <p className="text-lg font-semibold">Stream ended</p>
+              <p className="text-neutral-400 text-sm">
+                Redirecting to home in {countdown}…
+              </p>
+            </div>
+          )}
+
+          {status === 'connecting' && (
+            <div className="absolute inset-0 flex items-center justify-center">
+              <p className="text-neutral-400 text-sm">Connecting…</p>
+            </div>
+          )}
+
+          {status === 'blocked' && (
+            <div className="absolute inset-0 bg-black/90 flex flex-col items-center justify-center gap-3">
+              <p className="text-lg font-semibold">Video paused</p>
+              <button
+                onClick={() => {
+                  void videoRef.current?.play().then(() => updateStatus('live')).catch(() => {});
+                }}
+                className="bg-red-600 hover:bg-red-700 px-4 py-2 rounded font-medium"
+              >
+                Play
+              </button>
+            </div>
+          )}
+        </div>
+
+        <div className="mt-3 border border-neutral-800 rounded p-4 flex items-center justify-between">
+          {status === 'live' && info ? (
+            <>
+              <div>
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="w-2 h-2 rounded-full bg-red-500 inline-block" />
+                  <span className="text-xs uppercase tracking-wide text-red-400">Live</span>
+                </div>
+                <h1 className="font-semibold text-lg">{info.place}</h1>
+                <p className="text-sm text-neutral-400">
+                  {info.district}, {info.country}
+                </p>
+              </div>
+              <span className="text-sm text-neutral-500">👀 {info.viewerCount}</span>
+            </>
+          ) : (
+            <p className="text-sm text-neutral-400">
+              {status === 'connecting'
+                ? 'Connecting…'
+                : status === 'blocked'
+                ? 'Video paused'
+                : 'Stream offline'}
             </p>
-          </div>
-        )}
-
-        {status === 'blocked' && (
-          <div className="absolute inset-0 bg-black/90 flex flex-col items-center justify-center gap-3">
-            <p className="text-lg font-semibold">Video paused</p>
-            <button
-              onClick={() => {
-                void videoRef.current?.play().then(() => updateStatus('live')).catch(() => {});
-              }}
-              className="bg-red-600 hover:bg-red-700 px-4 py-2 rounded font-medium"
-            >
-              Play
-            </button>
-          </div>
-        )}
-      </div>
-
-      <div className="p-2 text-center text-sm text-neutral-300 bg-neutral-900 flex items-center justify-center gap-3">
-        {status === 'live' && info ? (
-          <>
-            <span>
-              {info.place} — {info.district}, {info.country}
-            </span>
-            <span className="text-neutral-500">👀 {info.viewerCount}</span>
-          </>
-        ) : status === 'connecting' ? (
-          'Connecting…'
-        ) : status === 'blocked' ? (
-          'Video paused'
-        ) : (
-          'Stream offline'
-        )}
+          )}
+        </div>
       </div>
     </main>
   );
