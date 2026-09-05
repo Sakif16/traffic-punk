@@ -6,6 +6,8 @@ import { useRouter } from 'next/navigation';
 import type Peer from 'peerjs';
 import type { MediaConnection } from 'peerjs';
 
+type FacingMode = 'user' | 'environment';
+
 export default function GoLivePage() {
   const [place, setPlace] = useState('');
   const [district, setDistrict] = useState('');
@@ -13,6 +15,9 @@ export default function GoLivePage() {
   const [error, setError] = useState('');
   const [live, setLive] = useState(false);
   const [viewerCount, setViewerCount] = useState(0);
+  const [canSwitchCamera, setCanSwitchCamera] = useState(false);
+  const [switchingCamera, setSwitchingCamera] = useState(false);
+  const [facingMode, setFacingMode] = useState<FacingMode>('user');
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const peerRef = useRef<Peer | null>(null);
@@ -71,9 +76,8 @@ export default function GoLivePage() {
     window.addEventListener('beforeunload', stopEverything);
     return () => {
       window.removeEventListener('beforeunload', stopEverything);
-      // Covers back-button / clicking a nav link without pressing "End Stream".
-      stopEverything();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function startStream(e: React.FormEvent<HTMLFormElement>) {
@@ -92,13 +96,24 @@ export default function GoLivePage() {
 
     try {
       const localStream = await navigator.mediaDevices.getUserMedia({
-        video: true,
+        video: { facingMode: 'user' },
         audio: true,
       });
       localStreamRef.current = localStream;
+      setFacingMode('user');
 
       if (videoRef.current) {
         videoRef.current.srcObject = localStream;
+      }
+
+      // Device labels are only populated after permission is granted, so
+      // this check has to happen after getUserMedia succeeds, not before.
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const videoInputs = devices.filter((d) => d.kind === 'videoinput');
+        setCanSwitchCamera(videoInputs.length > 1);
+      } catch {
+        setCanSwitchCamera(false);
       }
 
       const { default: PeerCtor } = await import('peerjs');
@@ -161,6 +176,54 @@ export default function GoLivePage() {
     }
   }
 
+  async function switchCamera() {
+    if (!localStreamRef.current || switchingCamera) return;
+    setSwitchingCamera(true);
+    setError('');
+
+    const nextFacingMode: FacingMode = facingMode === 'user' ? 'environment' : 'user';
+
+    try {
+      const newVideoStream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { exact: nextFacingMode } },
+        audio: false,
+      });
+      const newVideoTrack = newVideoStream.getVideoTracks()[0];
+      if (!newVideoTrack) throw new Error('No video track returned');
+
+      const oldVideoTrack = localStreamRef.current.getVideoTracks()[0];
+
+      // Swap the track on every connected viewer so they see the new camera
+      // without needing to reconnect.
+      viewersRef.current.forEach((call) => {
+        const sender = call.peerConnection
+          ?.getSenders()
+          .find((s) => s.track && s.track.kind === 'video');
+        if (sender) {
+          sender.replaceTrack(newVideoTrack).catch((err) => {
+            console.error('Failed to switch camera for a viewer', err);
+          });
+        }
+      });
+
+      // Rebuild the local stream with the new video track + the existing audio track.
+      const audioTracks = localStreamRef.current.getAudioTracks();
+      const updatedStream = new MediaStream([newVideoTrack, ...audioTracks]);
+
+      oldVideoTrack?.stop();
+      localStreamRef.current = updatedStream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = updatedStream;
+      }
+      setFacingMode(nextFacingMode);
+    } catch (err) {
+      console.error(err);
+      setError('Could not switch camera.');
+    } finally {
+      setSwitchingCamera(false);
+    }
+  }
+
   function handleStop() {
     stopEverything();
     router.push('/');
@@ -212,7 +275,22 @@ export default function GoLivePage() {
       )}
 
       <div className={live ? 'mt-4' : 'mt-4 hidden'}>
-        <video ref={videoRef} autoPlay muted playsInline className="w-full rounded bg-black" />
+        <div className="relative">
+          <video ref={videoRef} autoPlay muted playsInline className="w-full rounded bg-black" />
+          {canSwitchCamera && live && (
+            <button
+              onClick={switchCamera}
+              disabled={switchingCamera}
+              className="absolute top-2 right-2 bg-black/60 hover:bg-black/80 disabled:opacity-50 text-lg w-9 h-9 rounded-full flex items-center justify-center"
+              title="Switch camera"
+            >
+              🔄
+            </button>
+          )}
+        </div>
+
+        {error && live && <p className="text-red-500 text-sm mt-2">{error}</p>}
+
         {live && (
           <div className="mt-3 flex items-center justify-between">
             <span className="text-sm text-neutral-400">👀 {viewerCount} watching</span>
