@@ -3,6 +3,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
+import Link from 'next/link';
 import type Peer from 'peerjs';
 import type { MediaConnection } from 'peerjs';
 import { LiveStream } from '@/lib/types';
@@ -224,6 +225,13 @@ export default function WatchPage() {
   return (
     <main className="min-h-screen bg-neutral-950 text-neutral-100 flex flex-col items-center p-4 sm:p-6">
       <div className="w-full max-w-3xl">
+        <Link
+          href="/"
+          className="inline-block mb-3 text-sm text-neutral-400 hover:text-neutral-200"
+        >
+          ← Back to Home
+        </Link>
+
         <div className="relative w-full aspect-video bg-black rounded overflow-hidden">
           <video
             ref={videoRef}
