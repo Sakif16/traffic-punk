@@ -9,7 +9,6 @@ import { LiveStream } from '@/lib/types';
 
 function HomeContent() {
   const [streams, setStreams] = useState<LiveStream[]>([]);
-  const [origin, setOrigin] = useState('');
 
   const searchParams = useSearchParams();
   const isEmbed = searchParams.get('embed') === '1';
@@ -25,7 +24,6 @@ function HomeContent() {
   }, []);
 
   useEffect(() => {
-    setOrigin(window.location.origin);
     const timeout = setTimeout(fetchStreams, 0);
     const interval = setInterval(fetchStreams, 4000);
     return () => {
@@ -40,8 +38,6 @@ function HomeContent() {
     navigator.clipboard.writeText(code);
     alert('Embed code copied to clipboard');
   }
-
-  const listEmbedCode = `<iframe src="${origin}?embed=1" width="640" height="480" allow="autoplay" frameborder="0"></iframe>`;
 
   return (
     <main className="max-w-4xl mx-auto p-6">
@@ -58,12 +54,6 @@ function HomeContent() {
       )}
 
       <div className="border border-neutral-800 rounded p-4">
-        {!isEmbed && (
-          <pre className="text-xs text-neutral-400 bg-neutral-900 rounded p-3 mb-4 overflow-x-auto whitespace-pre-wrap break-all">
-            {listEmbedCode}
-          </pre>
-        )}
-
         {streams.length === 0 && (
           <p className="text-neutral-400">No live streams right now.</p>
         )}
