@@ -14,6 +14,19 @@ const REDIRECT_SECONDS = 3;
 const MEDIA_WAIT_MS = 8000;
 const MAX_JOIN_ATTEMPTS = 3;
 
+// Replace this with the shareable link from Teachable Machine's
+// Export Model -> Tensorflow.js -> Upload my model. Keep the trailing slash.
+const TM_MODEL_URL = 'https://teachablemachine.withgoogle.com/models/REPLACE_MODEL_ID/';
+
+interface TeachablePrediction {
+  className: string;
+  probability: number;
+}
+
+interface TeachableModel {
+  predict: (image: HTMLVideoElement) => Promise<TeachablePrediction[]>;
+}
+
 export default function WatchPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
@@ -23,9 +36,42 @@ export default function WatchPage() {
   const [info, setInfo] = useState<LiveStream | null>(null);
   const [countdown, setCountdown] = useState<number | null>(null);
 
+  const modelRef = useRef<TeachableModel | null>(null);
+  const [analysing, setAnalysing] = useState(false);
+  const [trafficResult, setTrafficResult] = useState<TeachablePrediction | null>(null);
+  const [analyseError, setAnalyseError] = useState('');
+
   function updateStatus(nextStatus: Status) {
     statusRef.current = nextStatus;
     setStatus(nextStatus);
+  }
+
+  async function handleAnalyse() {
+    if (!videoRef.current || status !== 'live') return;
+    setAnalysing(true);
+    setAnalyseError('');
+
+    try {
+      if (!modelRef.current) {
+        const tmImage = await import('@teachablemachine/image');
+        const model = await tmImage.load(
+          TM_MODEL_URL + 'model.json',
+          TM_MODEL_URL + 'metadata.json'
+        );
+        modelRef.current = model as unknown as TeachableModel;
+      }
+
+      const predictions = await modelRef.current.predict(videoRef.current);
+      const top = predictions.reduce((best, p) =>
+        p.probability > best.probability ? p : best
+      );
+      setTrafficResult(top);
+    } catch (err) {
+      console.error(err);
+      setAnalyseError('Could not analyse traffic. Check the model is set up correctly.');
+    } finally {
+      setAnalysing(false);
+    }
   }
 
   useEffect(() => {
@@ -296,6 +342,29 @@ export default function WatchPage() {
             </p>
           )}
         </div>
+
+        {status === 'live' && (
+          <div className="mt-3 border border-neutral-800 rounded p-4">
+            <button
+              onClick={handleAnalyse}
+              disabled={analysing}
+              className="bg-purple-600 hover:bg-purple-700 disabled:opacity-50 px-4 py-2 rounded font-medium text-sm"
+            >
+              {analysing ? 'Analysing…' : 'Let Punk Analyse'}
+            </button>
+
+            {trafficResult && !analysing && (
+              <p className="mt-2 text-sm text-neutral-300">
+                Traffic condition: <span className="font-semibold">{trafficResult.className}</span>{' '}
+                <span className="text-neutral-500">
+                  ({Math.round(trafficResult.probability * 100)}%)
+                </span>
+              </p>
+            )}
+
+            {analyseError && <p className="mt-2 text-sm text-red-500">{analyseError}</p>}
+          </div>
+        )}
       </div>
     </main>
   );
