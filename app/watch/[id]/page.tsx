@@ -16,7 +16,7 @@ const MAX_JOIN_ATTEMPTS = 3;
 
 // Replace this with the shareable link from Teachable Machine's
 // Export Model -> Tensorflow.js -> Upload my model. Keep the trailing slash.
-const TM_MODEL_URL = 'https://teachablemachine.withgoogle.com/models/REPLACE_MODEL_ID/';
+const TM_MODEL_URL = 'https://teachablemachine.withgoogle.com/models/riWPgKf6k/';
 
 interface TeachablePrediction {
   className: string;
