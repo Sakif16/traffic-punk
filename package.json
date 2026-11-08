@@ -9,9 +9,8 @@
     "lint": "eslint"
   },
   "dependencies": {
-    "@teachablemachine/image": "^0.8.5",
-    "@tensorflow/tfjs": "^4.22.0",
     "next": "16.3.1",
+    "onnxruntime-web": "^1.31.1",
     "peerjs": "^1.5.5",
     "react": "19.2.8",
     "react-dom": "19.2.8"

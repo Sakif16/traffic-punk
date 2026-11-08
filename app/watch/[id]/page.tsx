@@ -7,6 +7,8 @@ import Link from 'next/link';
 import type Peer from 'peerjs';
 import type { MediaConnection } from 'peerjs';
 import { LiveStream } from '@/lib/types';
+import { useTrafficAnalysis } from '@/lib/useTrafficAnalysis';
+import type { TrafficLevel } from '@/lib/traffic';
 
 type Status = 'connecting' | 'live' | 'blocked' | 'offline';
 
@@ -14,64 +16,33 @@ const REDIRECT_SECONDS = 3;
 const MEDIA_WAIT_MS = 8000;
 const MAX_JOIN_ATTEMPTS = 3;
 
-// Replace this with the shareable link from Teachable Machine's
-// Export Model -> Tensorflow.js -> Upload my model. Keep the trailing slash.
-const TM_MODEL_URL = 'https://teachablemachine.withgoogle.com/models/riWPgKf6k/';
-
-interface TeachablePrediction {
-  className: string;
-  probability: number;
-}
-
-interface TeachableModel {
-  predict: (image: HTMLVideoElement) => Promise<TeachablePrediction[]>;
-}
+const LEVEL_STYLES: Record<TrafficLevel, string> = {
+  Light: 'bg-green-600/20 text-green-400 border-green-700',
+  Medium: 'bg-yellow-600/20 text-yellow-400 border-yellow-700',
+  Heavy: 'bg-red-600/20 text-red-400 border-red-700',
+};
 
 export default function WatchPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const statusRef = useRef<Status>('connecting');
   const [status, setStatus] = useState<Status>('connecting');
   const [info, setInfo] = useState<LiveStream | null>(null);
   const [countdown, setCountdown] = useState<number | null>(null);
+  const [showBoxes, setShowBoxes] = useState(true);
 
-  const modelRef = useRef<TeachableModel | null>(null);
-  const [analysing, setAnalysing] = useState(false);
-  const [trafficResult, setTrafficResult] = useState<TeachablePrediction | null>(null);
-  const [analyseError, setAnalyseError] = useState('');
+  const { state: analysisState, traffic } = useTrafficAnalysis({
+    videoRef,
+    canvasRef,
+    enabled: status === 'live',
+    showBoxes,
+  });
 
   function updateStatus(nextStatus: Status) {
     statusRef.current = nextStatus;
     setStatus(nextStatus);
-  }
-
-  async function handleAnalyse() {
-    if (!videoRef.current || status !== 'live') return;
-    setAnalysing(true);
-    setAnalyseError('');
-
-    try {
-      if (!modelRef.current) {
-        const tmImage = await import('@teachablemachine/image');
-        const model = await tmImage.load(
-          TM_MODEL_URL + 'model.json',
-          TM_MODEL_URL + 'metadata.json'
-        );
-        modelRef.current = model as unknown as TeachableModel;
-      }
-
-      const predictions = await modelRef.current.predict(videoRef.current);
-      const top = predictions.reduce((best, p) =>
-        p.probability > best.probability ? p : best
-      );
-      setTrafficResult(top);
-    } catch (err) {
-      console.error(err);
-      setAnalyseError('Could not analyse traffic. Check the model is set up correctly.');
-    } finally {
-      setAnalysing(false);
-    }
   }
 
   useEffect(() => {
@@ -287,6 +258,12 @@ export default function WatchPage() {
             className="w-full h-full object-contain"
           />
 
+          {/* Detection boxes are drawn here, on top of the video */}
+          <canvas
+            ref={canvasRef}
+            className="absolute inset-0 w-full h-full pointer-events-none"
+          />
+
           {status === 'offline' && (
             <div className="absolute inset-0 bg-black/90 flex flex-col items-center justify-center gap-2">
               <p className="text-lg font-semibold">Stream ended</p>
@@ -345,24 +322,43 @@ export default function WatchPage() {
 
         {status === 'live' && (
           <div className="mt-3 border border-neutral-800 rounded p-4">
-            <button
-              onClick={handleAnalyse}
-              disabled={analysing}
-              className="bg-purple-600 hover:bg-purple-700 disabled:opacity-50 px-4 py-2 rounded font-medium text-sm"
-            >
-              {analysing ? 'Analysing…' : 'Let Punk Analyse'}
-            </button>
-
-            {trafficResult && !analysing && (
-              <p className="mt-2 text-sm text-neutral-300">
-                Traffic condition: <span className="font-semibold">{trafficResult.className}</span>{' '}
-                <span className="text-neutral-500">
-                  ({Math.round(trafficResult.probability * 100)}%)
-                </span>
+            {analysisState === 'error' ? (
+              <p className="text-sm text-red-500">
+                Vehicle detector failed to load. Check that /models/yolo26n.onnx and /ort/ exist.
               </p>
+            ) : !traffic ? (
+              <p className="text-sm text-neutral-400">Loading vehicle detector…</p>
+            ) : (
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <p className="text-sm">
+                    Currently <span className="font-semibold">{traffic.total}</span>{' '}
+                    {traffic.total === 1 ? 'vehicle' : 'vehicles'} on junction
+                  </p>
+                  {Object.keys(traffic.counts).length > 0 && (
+                    <p className="text-xs text-neutral-500 mt-1">
+                      {Object.entries(traffic.counts)
+                        .map(([label, n]) => `${label} ×${n}`)
+                        .join(', ')}
+                    </p>
+                  )}
+                </div>
+                <span
+                  className={`text-sm font-medium px-3 py-1 rounded border ${LEVEL_STYLES[traffic.level]}`}
+                >
+                  Traffic: {traffic.level}
+                </span>
+              </div>
             )}
 
-            {analyseError && <p className="mt-2 text-sm text-red-500">{analyseError}</p>}
+            <label className="mt-3 flex items-center gap-2 text-xs text-neutral-400 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={showBoxes}
+                onChange={(e) => setShowBoxes(e.target.checked)}
+              />
+              Show detection boxes
+            </label>
           </div>
         )}
       </div>
