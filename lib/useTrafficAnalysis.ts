@@ -5,8 +5,10 @@ import { useEffect, useRef, useState, type RefObject } from 'react';
 import {
   Detection,
   SmoothedTraffic,
+  TrackedVehicle,
   TrafficSmoother,
   VEHICLE_CLASSES,
+  VehicleTracker,
   summarize,
 } from './traffic';
 
@@ -23,6 +25,9 @@ const MODEL_URL = '/models/yolo26n.onnx';
 const POLL_MS = 100;
 const UI_UPDATE_MS = 400;
 
+const MOVING_COLOR = '#22c55e';
+const STOPPED_COLOR = '#f97316';
+
 function clearCanvas(canvas: HTMLCanvasElement | null) {
   if (!canvas) return;
   const ctx = canvas.getContext('2d');
@@ -31,10 +36,11 @@ function clearCanvas(canvas: HTMLCanvasElement | null) {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 }
 
+// Draws boxes over the video, accounting for object-contain letterboxing.
 function drawDetections(
   canvas: HTMLCanvasElement,
   video: HTMLVideoElement,
-  vehicles: Detection[]
+  vehicles: TrackedVehicle[]
 ) {
   const ctx = canvas.getContext('2d');
   if (!ctx) return;
@@ -56,7 +62,6 @@ function drawDetections(
   const vh = video.videoHeight;
   if (!vw || !vh) return;
 
-  // The <video> uses object-contain, so find where the picture really sits.
   const scale = Math.min(cssW / vw, cssH / vh);
   const contentW = vw * scale;
   const contentH = vh * scale;
@@ -64,22 +69,24 @@ function drawDetections(
   const offsetY = (cssH - contentH) / 2;
 
   ctx.lineWidth = 2;
-  ctx.strokeStyle = '#22c55e';
   ctx.font = '12px sans-serif';
   ctx.textBaseline = 'top';
 
   for (const d of vehicles) {
+    const color = d.stationary ? STOPPED_COLOR : MOVING_COLOR;
     const x = offsetX + d.x1 * contentW;
     const y = offsetY + d.y1 * contentH;
     const w = (d.x2 - d.x1) * contentW;
     const h = (d.y2 - d.y1) * contentH;
 
+    ctx.strokeStyle = color;
     ctx.strokeRect(x, y, w, h);
 
-    const label = `${VEHICLE_CLASSES[d.classId]?.label ?? 'vehicle'} ${Math.round(d.score * 100)}%`;
+    const name = VEHICLE_CLASSES[d.classId]?.label ?? 'vehicle';
+    const label = `${name} ${Math.round(d.score * 100)}%${d.stationary ? ' - stopped' : ''}`;
     const textW = ctx.measureText(label).width + 6;
     const labelY = y >= 16 ? y - 16 : y;
-    ctx.fillStyle = '#22c55e';
+    ctx.fillStyle = color;
     ctx.fillRect(x, labelY, textW, 16);
     ctx.fillStyle = '#000000';
     ctx.fillText(label, x + 3, labelY + 2);
@@ -101,6 +108,7 @@ export function useTrafficAnalysis({ videoRef, canvasRef, enabled, showBoxes }: 
 
     const worker = new Worker('/yolo-worker.js', { type: 'module' });
     const smoother = new TrafficSmoother();
+    const tracker = new VehicleTracker();
     let cancelled = false;
     let ready = false;
     let busy = false;
@@ -129,12 +137,14 @@ export function useTrafficAnalysis({ videoRef, canvasRef, enabled, showBoxes }: 
 
         const summary = summarize(msg.detections as Detection[]);
         const now = performance.now();
-        const smoothed = smoother.push(summary, now);
+        const tracked = tracker.update(summary.vehicles, now);
+        const stationary = tracked.filter((v) => v.stationary).length;
+        const smoothed = smoother.push(summary, stationary, now);
 
         const canvas = canvasRef.current;
         const video = videoRef.current;
         if (canvas && video) {
-          if (showBoxesRef.current) drawDetections(canvas, video, summary.vehicles);
+          if (showBoxesRef.current) drawDetections(canvas, video, tracked);
           else clearCanvas(canvas);
         }
 
@@ -152,6 +162,7 @@ export function useTrafficAnalysis({ videoRef, canvasRef, enabled, showBoxes }: 
 
     worker.postMessage({ type: 'init', modelUrl: MODEL_URL });
 
+    // Sends the next frame once the worker is idle.
     async function tick() {
       if (cancelled) return;
 
