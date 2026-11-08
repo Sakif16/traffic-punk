@@ -1,13 +1,16 @@
-// Runs YOLO26 in a background thread so the video never stutters.
-// Handles both export formats:
-//   - raw:        [1, 4+numClasses, 8400]  (needs NMS, done here)
-//   - end-to-end: [1, 300, 6]              (already filtered by the model)
+// YOLO26 inference worker: full-frame pass plus zoomed tiles for small vehicles.
 import * as ort from '/ort/ort.wasm.min.mjs';
 
 const SIZE = 640;
-const MIN_SCORE = 0.25;
-const IOU_THRESHOLD = 0.45;
-const MAX_DETECTIONS = 300;
+const MIN_SCORE = 0.2;
+const PASS_IOU = 0.6;
+const MERGE_IOU = 0.55;
+const MAX_PER_PASS = 300;
+
+// Set TILE_COUNT to 0 or 1 to disable tiling.
+const TILE_COUNT = 3;
+const TILE_FRACTION = 0.45;
+const EDGE_EPS = 0.02;
 
 ort.env.wasm.wasmPaths = '/ort/';
 ort.env.wasm.numThreads = 1;
@@ -16,13 +19,15 @@ let session = null;
 const canvas = new OffscreenCanvas(SIZE, SIZE);
 const ctx = canvas.getContext('2d', { willReadFrequently: true });
 
+const clamp = (v) => Math.min(1, Math.max(0, v));
+
 async function init(modelUrl) {
   session = await ort.InferenceSession.create(modelUrl, {
     executionProviders: ['wasm'],
     graphOptimizationLevel: 'all',
   });
 
-  // Warm-up run so the first real frame is not slow.
+  // Warm-up run.
   const dummy = new ort.Tensor('float32', new Float32Array(3 * SIZE * SIZE), [1, 3, SIZE, SIZE]);
   await session.run({ [session.inputNames[0]]: dummy });
 }
@@ -39,27 +44,27 @@ function iou(a, b) {
   return union <= 0 ? 0 : inter / union;
 }
 
-// Non-maximum suppression, done separately for each class.
-function nms(boxes) {
+// Per-class non-maximum suppression.
+function nms(boxes, iouThreshold, limit) {
   boxes.sort((a, b) => b.score - a.score);
   const kept = [];
   for (const box of boxes) {
     let keep = true;
     for (const k of kept) {
-      if (k.classId === box.classId && iou(k, box) > IOU_THRESHOLD) {
+      if (k.classId === box.classId && iou(k, box) > iouThreshold) {
         keep = false;
         break;
       }
     }
     if (keep) {
       kept.push(box);
-      if (kept.length >= MAX_DETECTIONS) break;
+      if (kept.length >= limit) break;
     }
   }
   return kept;
 }
 
-// Returns boxes in 640x640 letterboxed pixel space: { x1, y1, x2, y2, score, classId }
+// Decodes model output into 640x640 pixel boxes. Supports [1, 4+nc, N], [1, N, 4+nc] and [1, N, 6].
 function decodeOutput(output) {
   const dims = output.dims;
   const d = output.data;
@@ -69,7 +74,7 @@ function decodeOutput(output) {
     throw new Error('Unexpected model output shape: [' + dims.join(', ') + ']');
   }
 
-  // End-to-end format: [1, N, 6] = x1, y1, x2, y2, score, classId
+  // End-to-end format: x1, y1, x2, y2, score, classId.
   if (dims[2] === 6) {
     for (let i = 0; i < dims[1]; i++) {
       const o = i * 6;
@@ -87,7 +92,6 @@ function decodeOutput(output) {
     return boxes;
   }
 
-  // Raw format. Either [1, 4+nc, N] (channels first) or [1, N, 4+nc].
   const channelsFirst = dims[1] < dims[2];
   const numChannels = channelsFirst ? dims[1] : dims[2];
   const numAnchors = channelsFirst ? dims[2] : dims[1];
@@ -126,24 +130,20 @@ function decodeOutput(output) {
     });
   }
 
-  return nms(boxes);
+  return nms(boxes, PASS_IOU, MAX_PER_PASS);
 }
 
-async function detect(bitmap) {
-  const w = bitmap.width;
-  const h = bitmap.height;
-
-  // Letterbox: resize keeping aspect ratio, pad the rest with grey.
-  const scale = Math.min(SIZE / w, SIZE / h);
-  const nw = Math.round(w * scale);
-  const nh = Math.round(h * scale);
+// Runs the model on one region; returns boxes normalised to that region.
+async function runPass(bitmap, rx, ry, rw, rh) {
+  const scale = Math.min(SIZE / rw, SIZE / rh);
+  const nw = Math.round(rw * scale);
+  const nh = Math.round(rh * scale);
   const padX = Math.floor((SIZE - nw) / 2);
   const padY = Math.floor((SIZE - nh) / 2);
 
   ctx.fillStyle = 'rgb(114,114,114)';
   ctx.fillRect(0, 0, SIZE, SIZE);
-  ctx.drawImage(bitmap, 0, 0, w, h, padX, padY, nw, nh);
-  bitmap.close();
+  ctx.drawImage(bitmap, rx, ry, rw, rh, padX, padY, nw, nh);
 
   const { data } = ctx.getImageData(0, 0, SIZE, SIZE);
   const area = SIZE * SIZE;
@@ -158,18 +158,72 @@ async function detect(bitmap) {
   const results = await session.run({ [session.inputNames[0]]: tensor });
   const output = results[session.outputNames[0]];
 
-  const boxes = decodeOutput(output);
-  const clamp = (v) => Math.min(1, Math.max(0, v));
-
-  // Map from 640x640 letterboxed space back to the original frame, normalised 0..1
-  return boxes.map((b) => ({
-    x1: clamp((b.x1 - padX) / scale / w),
-    y1: clamp((b.y1 - padY) / scale / h),
-    x2: clamp((b.x2 - padX) / scale / w),
-    y2: clamp((b.y2 - padY) / scale / h),
+  return decodeOutput(output).map((b) => ({
+    x1: clamp((b.x1 - padX) / scale / rw),
+    y1: clamp((b.y1 - padY) / scale / rh),
+    x2: clamp((b.x2 - padX) / scale / rw),
+    y2: clamp((b.y2 - padY) / scale / rh),
     score: b.score,
     classId: b.classId,
   }));
+}
+
+// Converts region-normalised boxes to full-frame normalised boxes.
+function toFullFrame(boxes, rx, ry, rw, rh, W, H) {
+  return boxes.map((b) => ({
+    x1: (rx + b.x1 * rw) / W,
+    y1: (ry + b.y1 * rh) / H,
+    x2: (rx + b.x2 * rw) / W,
+    y2: (ry + b.y2 * rh) / H,
+    score: b.score,
+    classId: b.classId,
+  }));
+}
+
+async function detect(bitmap) {
+  const W = bitmap.width;
+  const H = bitmap.height;
+
+  try {
+    const fullBoxes = await runPass(bitmap, 0, 0, W, H);
+    const all = toFullFrame(fullBoxes, 0, 0, W, H, W, H);
+
+    if (TILE_COUNT > 1) {
+      const landscape = W >= H;
+      for (let i = 0; i < TILE_COUNT; i++) {
+        const start = (i * (1 - TILE_FRACTION)) / (TILE_COUNT - 1);
+
+        let rx = 0;
+        let ry = 0;
+        let rw = W;
+        let rh = H;
+        if (landscape) {
+          rx = Math.round(start * W);
+          rw = Math.round(TILE_FRACTION * W);
+        } else {
+          ry = Math.round(start * H);
+          rh = Math.round(TILE_FRACTION * H);
+        }
+
+        const boxes = await runPass(bitmap, rx, ry, rw, rh);
+
+        // Drop boxes cut off by an inner tile border.
+        const usable = boxes.filter((b) => {
+          const a1 = landscape ? b.x1 : b.y1;
+          const a2 = landscape ? b.x2 : b.y2;
+          if (i > 0 && a1 < EDGE_EPS) return false;
+          if (i < TILE_COUNT - 1 && a2 > 1 - EDGE_EPS) return false;
+          return true;
+        });
+
+        all.push(...toFullFrame(usable, rx, ry, rw, rh, W, H));
+      }
+    }
+
+    return nms(all, MERGE_IOU, MAX_PER_PASS);
+  } finally {
+    bitmap.close();
+  }
 }
 
 self.onmessage = async (e) => {
