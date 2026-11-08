@@ -104,7 +104,7 @@ export default function WatchPage() {
         const audioTrack = destination.stream.getAudioTracks()[0];
         if (audioTrack) tracks.push(audioTrack);
       } catch {
-        // A video-only offer still lets browsers negotiate the important visual track.
+        // Video-only offer is enough to negotiate the call.
       }
 
       return new MediaStream(tracks);
@@ -208,8 +208,7 @@ export default function WatchPage() {
       peer.on('error', goOffline);
       peer.on('disconnected', goOffline);
 
-      // Backup check: if the stream disappears from the server list
-      // (e.g. broadcaster tab crashed without a clean close event), catch it here too.
+      // Detects streams that vanish without a clean close event.
       pollInterval = setInterval(async () => {
         try {
           const r = await fetch('/api/streams');
@@ -221,7 +220,7 @@ export default function WatchPage() {
             setInfo(updated);
           }
         } catch {
-          // ignore transient errors
+          // Ignore transient errors.
         }
       }, 5000);
     }
@@ -258,7 +257,7 @@ export default function WatchPage() {
             className="w-full h-full object-contain"
           />
 
-          {/* Detection boxes are drawn here, on top of the video */}
+          {/* Detection boxes overlay */}
           <canvas
             ref={canvasRef}
             className="absolute inset-0 w-full h-full pointer-events-none"
@@ -334,6 +333,12 @@ export default function WatchPage() {
                   <p className="text-sm">
                     Currently <span className="font-semibold">{traffic.total}</span>{' '}
                     {traffic.total === 1 ? 'vehicle' : 'vehicles'} on junction
+                    {traffic.stationary > 0 && (
+                      <span className="text-orange-400">
+                        {' '}
+                        · {traffic.stationary} not moving
+                      </span>
+                    )}
                   </p>
                   {Object.keys(traffic.counts).length > 0 && (
                     <p className="text-xs text-neutral-500 mt-1">
@@ -344,21 +349,27 @@ export default function WatchPage() {
                   )}
                 </div>
                 <span
-                  className={`text-sm font-medium px-3 py-1 rounded border ${LEVEL_STYLES[traffic.level]}`}
+                  className={`text-sm font-medium px-3 py-1 rounded border whitespace-nowrap ${LEVEL_STYLES[traffic.level]}`}
                 >
                   Traffic: {traffic.level}
                 </span>
               </div>
             )}
 
-            <label className="mt-3 flex items-center gap-2 text-xs text-neutral-400 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={showBoxes}
-                onChange={(e) => setShowBoxes(e.target.checked)}
-              />
-              Show detection boxes
-            </label>
+            <div className="mt-3 flex items-center justify-between gap-4">
+              <label className="flex items-center gap-2 text-xs text-neutral-400 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={showBoxes}
+                  onChange={(e) => setShowBoxes(e.target.checked)}
+                />
+                Show detection boxes
+              </label>
+              <span className="text-xs text-neutral-500">
+                <span className="text-green-500">■</span> moving{' '}
+                <span className="text-orange-500">■</span> stopped
+              </span>
+            </div>
           </div>
         )}
       </div>
