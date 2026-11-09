@@ -1,5 +1,10 @@
-// YOLO26 inference worker: full-frame pass plus zoomed tiles for small vehicles.
-import * as ort from '/ort/ort.wasm.min.mjs';
+// YOLO26 inference worker: WebGPU with WASM fallback, full-frame pass plus zoomed tiles.
+let ort;
+try {
+  ort = await import('/ort/ort.webgpu.min.mjs');
+} catch {
+  ort = await import('/ort/ort.wasm.min.mjs');
+}
 
 const SIZE = 640;
 const MIN_SCORE = 0.2;
@@ -7,8 +12,9 @@ const PASS_IOU = 0.6;
 const MERGE_IOU = 0.55;
 const MAX_PER_PASS = 300;
 
-// Set TILE_COUNT to 0 or 1 to disable tiling.
-const TILE_COUNT = 3;
+// Tiles per frame by backend. 0 or 1 disables tiling.
+const TILES_GPU = 3;
+const TILES_CPU = 2;
 const TILE_FRACTION = 0.45;
 const EDGE_EPS = 0.02;
 
@@ -16,20 +22,36 @@ ort.env.wasm.wasmPaths = '/ort/';
 ort.env.wasm.numThreads = 1;
 
 let session = null;
+let backend = 'wasm';
+let tileCount = TILES_CPU;
 const canvas = new OffscreenCanvas(SIZE, SIZE);
 const ctx = canvas.getContext('2d', { willReadFrequently: true });
 
 const clamp = (v) => Math.min(1, Math.max(0, v));
 
-async function init(modelUrl) {
-  session = await ort.InferenceSession.create(modelUrl, {
-    executionProviders: ['wasm'],
+async function createSession(modelUrl, provider) {
+  const s = await ort.InferenceSession.create(modelUrl, {
+    executionProviders: [provider],
     graphOptimizationLevel: 'all',
   });
-
-  // Warm-up run.
+  // Warm-up run, also verifies the backend actually works.
   const dummy = new ort.Tensor('float32', new Float32Array(3 * SIZE * SIZE), [1, 3, SIZE, SIZE]);
-  await session.run({ [session.inputNames[0]]: dummy });
+  await s.run({ [s.inputNames[0]]: dummy });
+  return s;
+}
+
+async function init(modelUrl) {
+  for (const provider of ['webgpu', 'wasm']) {
+    try {
+      session = await createSession(modelUrl, provider);
+      backend = provider;
+      tileCount = provider === 'webgpu' ? TILES_GPU : TILES_CPU;
+      return;
+    } catch (err) {
+      console.warn('Backend unavailable:', provider, err);
+    }
+  }
+  throw new Error('No inference backend could be started.');
 }
 
 function iou(a, b) {
@@ -188,10 +210,10 @@ async function detect(bitmap) {
     const fullBoxes = await runPass(bitmap, 0, 0, W, H);
     const all = toFullFrame(fullBoxes, 0, 0, W, H, W, H);
 
-    if (TILE_COUNT > 1) {
+    if (tileCount > 1) {
       const landscape = W >= H;
-      for (let i = 0; i < TILE_COUNT; i++) {
-        const start = (i * (1 - TILE_FRACTION)) / (TILE_COUNT - 1);
+      for (let i = 0; i < tileCount; i++) {
+        const start = (i * (1 - TILE_FRACTION)) / (tileCount - 1);
 
         let rx = 0;
         let ry = 0;
@@ -212,7 +234,7 @@ async function detect(bitmap) {
           const a1 = landscape ? b.x1 : b.y1;
           const a2 = landscape ? b.x2 : b.y2;
           if (i > 0 && a1 < EDGE_EPS) return false;
-          if (i < TILE_COUNT - 1 && a2 > 1 - EDGE_EPS) return false;
+          if (i < tileCount - 1 && a2 > 1 - EDGE_EPS) return false;
           return true;
         });
 
@@ -232,7 +254,7 @@ self.onmessage = async (e) => {
   if (msg.type === 'init') {
     try {
       await init(msg.modelUrl);
-      self.postMessage({ type: 'ready' });
+      self.postMessage({ type: 'ready', backend });
     } catch (err) {
       self.postMessage({ type: 'error', fatal: true, message: String(err) });
     }
