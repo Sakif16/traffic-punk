@@ -1,8 +1,27 @@
 @import "tailwindcss";
 
+/*
+  Warm NoboJatra-style palette.
+  Overriding Tailwind's `neutral` scale re-themes every page
+  (home, /watch/[id], /go-live) without touching their markup.
+*/
+@theme {
+  --color-neutral-950: #1a1411; /* page background */
+  --color-neutral-900: #241b16; /* cards / inputs */
+  --color-neutral-800: #3a2d25; /* borders / subtle buttons */
+  --color-neutral-700: #4d3c31;
+  --color-neutral-500: #9a8678;
+  --color-neutral-400: #b8a595;
+  --color-neutral-100: #f5ede6; /* main text */
+
+  /* Orange accent, matching the host site's active nav pill */
+  --color-orange-400: #f0903a;
+  --color-orange-500: #e8821f;
+}
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #1a1411;
+  --foreground: #f5ede6;
 }
 
 @theme inline {
@@ -12,15 +31,10 @@
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
-
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
 }
