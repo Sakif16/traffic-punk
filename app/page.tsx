@@ -5,10 +5,13 @@ import { useEffect, useState, useCallback, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { LiveStream } from '@/lib/types';
+import { useSensor } from '@/lib/useSensor';
+import { ConditionsInline } from '@/components/Conditions';
 
 
 function HomeContent() {
   const [streams, setStreams] = useState<LiveStream[]>([]);
+  const sensor = useSensor();
 
   const searchParams = useSearchParams();
   const isEmbed = searchParams.get('embed') === '1';
@@ -83,7 +86,8 @@ function HomeContent() {
               <p className="text-sm text-neutral-400">
                 {s.district}, {s.country}
               </p>
-              <p className="text-xs text-neutral-500 mb-3">👀 {s.viewerCount} watching</p>
+              <p className="text-xs text-neutral-500 mb-1">👀 {s.viewerCount} watching</p>
+              <ConditionsInline sensor={sensor} />
               <div className="flex gap-2">
                 <Link
                   href={`/watch/${s.id}`}

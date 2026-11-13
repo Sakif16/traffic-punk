@@ -8,6 +8,8 @@ import type Peer from 'peerjs';
 import type { MediaConnection } from 'peerjs';
 import { LiveStream } from '@/lib/types';
 import { useTrafficAnalysis } from '@/lib/useTrafficAnalysis';
+import { useSensor } from '@/lib/useSensor';
+import { ConditionsPanel } from '@/components/Conditions';
 import type { TrafficLevel } from '@/lib/traffic';
 
 type Status = 'connecting' | 'live' | 'blocked' | 'offline';
@@ -32,6 +34,8 @@ export default function WatchPage() {
   const [info, setInfo] = useState<LiveStream | null>(null);
   const [countdown, setCountdown] = useState<number | null>(null);
   const [showBoxes, setShowBoxes] = useState(true);
+
+  const sensor = useSensor();
 
   const { state: analysisState, traffic } = useTrafficAnalysis({
     videoRef,
@@ -372,6 +376,8 @@ export default function WatchPage() {
             </div>
           </div>
         )}
+
+        {status === 'live' && <ConditionsPanel sensor={sensor} />}
       </div>
     </main>
   );

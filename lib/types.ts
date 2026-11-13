@@ -21,3 +21,16 @@ export interface CreateStreamPayload {
 export interface UpdateStreamPayload {
   viewerCount: number;
 }
+
+export interface SensorReading {
+  sensorId: string;
+  temperature: number; // °C
+  humidity: number; // % relative humidity
+  receivedAt: number; // server time (ms)
+}
+
+export interface SensorPayload {
+  sensorId?: string;
+  temperature: number;
+  humidity: number;
+}
