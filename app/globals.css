@@ -1,10 +1,5 @@
 @import "tailwindcss";
 
-/*
-  Warm NoboJatra-style palette.
-  Overriding Tailwind's `neutral` scale re-themes every page
-  (home, /watch/[id], /go-live) without touching their markup.
-*/
 @theme {
   --color-neutral-950: #1a1411; /* page background */
   --color-neutral-900: #241b16; /* cards / inputs */
@@ -22,6 +17,8 @@
 :root {
   --background: #1a1411;
   --foreground: #f5ede6;
+
+  color-scheme: dark;
 }
 
 @theme inline {
